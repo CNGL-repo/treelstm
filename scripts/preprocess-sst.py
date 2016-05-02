@@ -223,7 +223,8 @@ def load_dictionary(dirpath):
     with open(os.path.join(dirpath, 'dictionary.txt')) as dictionary:
         for line in dictionary:
             s, idx = line.split('|')
-            d[s] = labels[int(idx)]
+            if not d.has_key(s):
+                d[s] = labels[int(idx)]
     return d
 
 def build_vocab(filepaths, dst_path, lowercase=True):
