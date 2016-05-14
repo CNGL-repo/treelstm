@@ -5,6 +5,8 @@ Preprocessing script for Stanford Sentiment Treebank data.
 
 import os
 import glob
+import sys
+import types
 
 #
 # Trees and tree loading
@@ -15,12 +17,14 @@ class ConstTree(object):
         self.left = None
         self.right = None
 
-    def size(self):
+    def get_size(self):
+        # TODO: Why not a local varibale for size? self.size doesn't
+        #       seem to be used anywhere.
         self.size = 1
         if self.left is not None:
-            self.size += self.left.size()
+            self.size += self.left.get_size()
         if self.right is not None:
-            self.size += self.right.size()
+            self.size += self.right.get_size()
         return self.size
 
     def set_spans(self):
@@ -33,9 +37,63 @@ class ConstTree(object):
             self.span += ' ' + self.right.set_spans()
         return self.span
 
+    def p_short_repr(self, value):
+        if type(value) == types.StringType:
+            r = repr(value)
+            if len(r) < 18:
+                return r
+            return repr(value[:7]) + '...' + repr(value[-7:])
+        r = repr(value)
+        if len(r) > 15:
+            return 'PREFIX:' + r[:10]
+        return r
+
+    def __repr__(self):
+        return self.my_repr()
+
+    def my_repr(self, show_children = True):
+        retval = []
+        retval.append('<ConstTree %x' %id(self))
+        try:
+            retval.append('size=%s' %self.p_short_repr(self.size))
+        except:
+            pass
+        try:
+            retval.append('word=%s' %self.p_short_repr(self.word))
+        except:
+            pass
+        try:
+            retval.append('parent=%s' %self.p_short_repr(self.parent))
+        except:
+            pass
+        try:
+            retval.append('idx=%s' %self.p_short_repr(self.idx))
+        except:
+            pass
+        try:
+            retval.append('span=%s' %self.p_short_repr(self.span))
+        except:
+            pass
+        if show_children:
+            if self.left != self:
+                if self.left is None:
+                    retval.append('left=None')
+                else:
+                    retval.append('left=%s' %self.left.my_repr(show_children = False))
+            if self.right != self:
+                if self.right is None:
+                    retval.append('right=None')
+                else:
+                    retval.append('right=%s' %self.right.my_repr(show_children = False))
+        retval.append('/>')
+        return ' '.join(retval)
+
     def get_labels(self, spans, labels, dictionary):
         if self.span in dictionary:
-            spans[self.idx] = self.span
+            try:
+                spans[self.idx] = self.span    # index error on first sentence
+            except IndexError:
+                sys.stderr.write('Cannot store span for %r in %r\n' %(self, spans))
             labels[self.idx] = dictionary[self.span]
         if self.left is not None:
             self.left.get_labels(spans, labels, dictionary)
@@ -47,10 +105,10 @@ class DepTree(object):
         self.children = []
         self.lo, self.hi = None, None
 
-    def size(self):
+    def get_size(self):
         self.size = 1
         for c in self.children:
-            self.size += c.size()
+            self.size += c.get_size()
         return self.size
 
     def set_spans(self, words):
@@ -71,29 +129,51 @@ class DepTree(object):
         for c in self.children:
             c.get_labels(spans, labels, dictionary)
 
-def load_trees(dirpath):
+def load_trees(dirpath, opt_dependencies = True):
     const_trees, dep_trees, toks = [], [], []
+    if opt_dependencies:
+        dparentsfile = open(os.path.join(dirpath, 'dparents.txt'))
     with open(os.path.join(dirpath, 'parents.txt')) as parentsfile, \
-         open(os.path.join(dirpath, 'dparents.txt')) as dparentsfile, \
          open(os.path.join(dirpath, 'sents.txt')) as toksfile:
         parents, dparents = [], []
         for line in parentsfile:
             parents.append(map(int, line.split()))
-        for line in dparentsfile:
-            dparents.append(map(int, line.split()))
+        if opt_dependencies:
+            for line in dparentsfile:
+                dparents.append(map(int, line.split()))
         for line in toksfile:
             toks.append(line.strip().split())
+        #sys.stderr.write('load_trees() found %d trees and %s sentences\n' %(len(parents), len(toks)))
         for i in xrange(len(toks)):
+            #sys.stderr.write('building tree %d...\n' %i)
             const_trees.append(load_constituency_tree(parents[i], toks[i]))
-            dep_trees.append(load_dependency_tree(dparents[i]))
+            if opt_dependencies:
+                dep_trees.append(load_dependency_tree(dparents[i]))
     return const_trees, dep_trees, toks
 
 def load_constituency_tree(parents, words):
     trees = []
     root = None
     size = len(parents)
+    #sys.stderr.write('\twith %d nodes\n' %size)
+    node2num_children = (size+1) * [0]
     for i in xrange(size):
         trees.append(None)
+        p = parents[i]
+        if p >= 0:
+            node2num_children[p] += 1
+    num_children2count = {}
+    for i in xrange(size):
+        n = node2num_children[i]
+        try:
+            c = num_children2count[n]
+        except:
+            c = 0
+        num_children2count[n] = c + 1
+    for key in num_children2count.keys():
+        #sys.stderr.write('\tof which %d have %d child(ren)\n' %(num_children2count[key], key))
+        if key > 2:
+            raise ValueError, 'found %d nodes with %d children in %r / %r' %(num_children2count[key], key, words, parents)
 
     word_idx = 0
     for i in xrange(size):
@@ -127,6 +207,10 @@ def load_constituency_tree(parents, words):
                     prev = tree
                     prev_idx = idx
                     idx = parent
+        #sys.stderr.write('\tstep %d:\n' %i)
+        #for j in range(len(trees)):
+        #    sys.stderr.write('\t\ttrees[%3d] = %r\n' %(j, trees[j]))
+    #sys.stderr.write('\troot: %r\n' %root)
     return root
 
 def load_dependency_tree(parents):
@@ -270,7 +354,8 @@ def split(sst_dir, train_dir, dev_dir, test_dir):
                 devparents.write('\n')
 
 def get_labels(tree, dictionary):
-    size = tree.size()
+    size = tree.get_size()
+    #sys.stderr.write('get_labels(%r,...): size = %d\n' %(tree, size))
     spans, labels = [], []
     for i in xrange(size):
         labels.append(None)
@@ -278,34 +363,43 @@ def get_labels(tree, dictionary):
     tree.get_labels(spans, labels, dictionary)
     return spans, labels
 
-def write_labels(dirpath, dictionary):
+def write_labels(dirpath, dictionary, opt_dependencies = True):
     print('Writing labels for trees in ' + dirpath)
-    with open(os.path.join(dirpath, 'labels.txt'), 'w') as labels, \
-         open(os.path.join(dirpath, 'dlabels.txt'), 'w') as dlabels:
+    labels = open(os.path.join(dirpath, 'labels.txt'), 'w')
+    if opt_dependencies:
+        dlabels =  open(os.path.join(dirpath, 'dlabels.txt'), 'w')
+    if True:
         # load constituency and dependency trees
-        const_trees, dep_trees, toks = load_trees(dirpath)
+        const_trees, dep_trees, toks = load_trees(dirpath, opt_dependencies)
+
 
         # write span labels
         for i in xrange(len(const_trees)):
             const_trees[i].set_spans()
-            dep_trees[i].set_spans(toks[i])
+            if opt_dependencies:
+                dep_trees[i].set_spans(toks[i])
 
             # const tree labels
             s, l = [], []
-            for j in xrange(const_trees[i].size()):
+            for j in xrange(const_trees[i].get_size()):
                 s.append(None)
                 l.append(None)
+            #sys.stderr.write('%r\n' %const_trees[i])
             const_trees[i].get_labels(s, l, dictionary)
             labels.write(' '.join(map(str, l)) + '\n')
 
-            # dep tree labels
-            dep_trees[i].span = const_trees[i].span
-            s, l = [], []
-            for j in xrange(len(toks[i])):
-                s.append(None)
-                l.append('#')
-            dep_trees[i].get_labels(s, l, dictionary)
-            dlabels.write(' '.join(map(str, l)) + '\n')
+            if opt_dependencies:
+                # dep tree labels
+                dep_trees[i].span = const_trees[i].span
+                s, l = [], []
+                for j in xrange(len(toks[i])):
+                    s.append(None)
+                    l.append('#')
+                dep_trees[i].get_labels(s, l, dictionary)
+                dlabels.write(' '.join(map(str, l)) + '\n')
+    labels.close()
+    if opt_dependencies:
+        dlabels.close()
 
 def dependency_parse(filepath, cp='', tokenize=True):
     print('\nDependency parsing ' + filepath)
@@ -343,6 +437,8 @@ if __name__ == '__main__':
         os.path.join(lib_dir, 'stanford-parser/stanford-parser.jar'),
         os.path.join(lib_dir, 'stanford-parser/stanford-parser-3.5.1-models.jar')])
     for filepath in sent_paths:
+        if '/nbest' in filepath:
+            continue
         dependency_parse(filepath, cp=classpath, tokenize=False)
 
     # get vocabulary
@@ -354,3 +450,6 @@ if __name__ == '__main__':
     write_labels(train_dir, dictionary)
     write_labels(dev_dir, dictionary)
     write_labels(test_dir, dictionary)
+    for i in range(0):  # 12
+        test_dir = os.path.join(sst_dir, 'nbest%02d' %i)
+        write_labels(test_dir, dictionary, opt_dependencies = False)
