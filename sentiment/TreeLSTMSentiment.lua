@@ -63,6 +63,7 @@ function TreeLSTMSentiment:train(dataset)
   self.treelstm:training()
   local indices = torch.randperm(dataset.size)
   local zeros = torch.zeros(self.mem_dim)
+  local nextgc = 250
   for i = 1, dataset.size, self.batch_size do
     xlua.progress(i, dataset.size)
     local batch_size = math.min(i + self.batch_size - 1, dataset.size) - i + 1
@@ -96,6 +97,11 @@ function TreeLSTMSentiment:train(dataset)
 
     optim.adagrad(feval, self.params, self.optim_state)
     self.emb:updateParameters(self.emb_learning_rate)
+    if i >= nextgc then
+        collectgarbage()
+        nextgc = nextgc + 800
+    end
+
   end
   xlua.progress(dataset.size, dataset.size)
 end
@@ -117,9 +123,14 @@ end
 
 function TreeLSTMSentiment:predict_dataset(dataset)
   local predictions = torch.Tensor(dataset.size)
+  local nextgc = 250
   for i = 1, dataset.size do
     xlua.progress(i, dataset.size)
     predictions[i] = self:predict(dataset.trees[i], dataset.sents[i])
+    if i >= nextgc then
+        collectgarbage()
+        nextgc = nextgc + 800
+    end
   end
   return predictions
 end
